@@ -1,112 +1,75 @@
 # Slay the Spire 2 - Digital Auto-Painter
 
-Forked from [https://github.com/SKYFIRE5836/Slay-the-Spire-2-Drawing](Slay-the-Spire-2-Drawing)
-
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-
-An auto-drawing tool for Slay the Spire 2. It freezes your screen, lets you select a target area, and then automatically draws line art into the game using simulated mouse strokes. Supports images, text, pre-made line art, and area fills.
+An automation tool for the "Digital Amber" drawing mechanic in Slay the Spire 2. This tool translates images, text, and custom line art into in-game mouse strokes with high precision.
 
 ---
 
-## What's New
+## Quick Start (No Setup Required)
 
-### v1.2.1 (Hotfix)
-- Fixed tutorial popup getting cut off on high-DPI displays (125%, 150%, etc.). Added `Esc` to dismiss.
-- Fixed `P` and `[` hotkeys firing during normal typing. They now only trigger while a drawing task is active.
+For most users, no Python installation is needed. Follow these steps to start drawing:
 
-### v1.2.0 (Major Update)
-- **Multi-monitor support** — uses `VIRTUALDESK` so selection and drawing work correctly across screens.
-- **Pause & resume** — press `P` to pause mid-draw, `Ctrl+Alt+P` to resume from where you left off, `[` to abort.
-- **Zoomable preview** — scroll to zoom and drag to pan in the preview panel.
-- **Left-click mode** — toggle between left and right mouse button for drawing. Includes a "Fog of War" fill mode.
-- **Smooth strokes** — replaced the old pixel-by-pixel approach with continuous mouse drag, so lines work properly in Windows Paint and similar apps.
+1. **Download:** Grab the latest SlaytheSpire2Drawing.exe from the [Releases](../../releases) page.
+3. **Run as Admin:** Right-click SlaytheSpire2Drawing.exe and select "Run as Administrator". 
+   > *Note: Admin rights are required for the tool to simulate mouse movements and listen for emergency stop hotkeys.*
+4. **Select & Draw:**
+   - Choose your mode (Image, Text, or Fill).
+   - Click "Start Drawing"—your screen will dim and freeze.
+   - Drag a box over the area in the game where you want to draw.
+   - Release the mouse and the bot will begin.
 
-> See the [Releases page](../../releases) for older versions.
+### In-Game Controls
+* **P**: Pause (immediately releases the mouse).
+* **Ctrl + Alt + P**: Resume from where you paused.
+* **[**: Abort the task entirely.
 
 ---
 
 ## Features
 
-- **Screen freeze selection ("Digital Amber")** — dims all monitors and lets you draw a selection box over exactly where you want the art placed.
-- **Physical mouse simulation** — holds the mouse button down and drags along contours rather than clicking individual pixels, producing smooth continuous lines.
-- **Four drawing modes:**
-  - **Mode A — Image to line art:** Loads an image and extracts edges using OpenCV (Gaussian blur + Canny edge detection).
-  - **Mode B — Text to line art:** Renders text using a system font, then extracts the outlines.
-  - **Mode C — Load existing line art:** Skips processing and draws a line art image directly.
-  - **Mode D — Fog of War fill:** Fills a rectangular area with a crosshatch sweep pattern at a configurable spacing.
-- **Safety hotkeys:**
-  - `P` — Pause (releases the mouse immediately so you can interact with other windows).
-  - `Ctrl + Alt + P` — Resume from the exact point where you paused.
-  - `[` — Abort the current task entirely.
-- **Modern UI** — 16:9 layout with a live preview panel, adjustable detail/speed sliders, and auto-saved settings.
+* **Image to Line Art:** Uses edge detection to trace any .png or .jpg directly onto the canvas.
+* **Smooth Stroke Engine:** Simulates natural mouse dragging for continuous, high-quality lines compatible with the game's drawing engine.
+* **Multi-Monitor Support:** Correctly handles coordinate mapping across different screen resolutions and "Virtual Desktop" setups.
+* **Area Filling:** A "Fog of War" mode that fills a designated area with a configurable crosshatch pattern.
+* **Adjustable Speed & Detail:** Fine-tune sliders to balance drawing quality with completion time.
 
 ---
 
-## Quick Start
+## Developer & Technical Info
 
-No Python needed — just grab the pre-built executable:
+This repository is a refactored fork of the original [Slay-the-Spire-2-Drawing](https://github.com/SKYFIRE5836/Slay-the-Spire-2-Drawing) project. 
 
-1. Download the latest `SlaytheSpire2Drawing.zip` from the [Releases page](../../releases).
-2. Extract it anywhere. The folder should contain `SlaytheSpire2Drawing.exe` and an `output_lines` folder with `brush.ico`.
-3. **Right-click the `.exe` and choose "Run as administrator."** This is required for the global hotkeys and mouse simulation to work.
-4. Pick a drawing mode on the left, adjust detail and speed, then switch to your target app (the game, Paint, etc.).
-5. Click **"Start Drawing"** — the screen dims and freezes.
-6. Drag a rectangle over the area you want to draw in. Release the mouse and it starts automatically.
+### Architecture
+The project has been refactored into a modular package structure to separate concerns and improve maintainability:
+* **SlaytheSpire2Drawing.py**: The entry point script that initializes the application.
+* **spire_painter/**: The core logic package.
+    * **app.py**: Manages the main application lifecycle and GUI coordination.
+    * **image_processing.py**: Handles OpenCV-based edge detection and coordinate generation.
+    * **drawing.py**: Contains the low-level mouse simulation and stroke logic.
+* **output_lines/**: Contains required assets such as `brush.ico`.
 
-> **Tip:** Press `P` at any time to pause, or `[` to cancel.
-
----
-
-
-## Developer Guide
-
-### 1. Clone the repo
+### Running from Source
+If you prefer to run the script manually, ensure you have Python 3.10+ installed:
 
 ```bash
-git clone https://github.com/lindenhutchinson/Slay-the-Spire-2-Drawing.git
-cd Slay-the-Spire-2-Drawing
-```
+# Install dependencies
+pip install -r requirements.txt
 
-### 2. Install dependencies
-
-Requires Python 3.8+:
-
-```bash
-pip install opencv-python numpy Pillow keyboard
-```
-
-The GUI uses Tkinter, which is included with Python.
-
-### 3. Run it
-
-The script uses global keyboard hooks, so your terminal needs admin privileges:
-
-```bash
+# Run the application
 python SlaytheSpire2Drawing.py
 ```
 
-### 4. Build an EXE
-
+### Building the Executable
+To package the app yourself using PyInstaller, ensure you include the required data directories:
 ```bash
-pip install pyinstaller
-pyinstaller --onefile --noconsole --icon=brush.ico SlaytheSpire2Drawing.py
+python -m PyInstaller --onefile --noconsole --icon=output_lines/brush.ico SlaytheSpire2Drawing.py
 ```
-
-The output goes to the `dist` folder.
 
 ---
 
 ## FAQ
 
-**The `.exe` doesn't launch, or pressing `P` doesn't pause.**
-Run it as administrator. Windows blocks background keyboard hooks without elevated privileges.
+**Why does my antivirus flag the .exe?**
+The tool uses global keyboard hooks (for the Pause key) and simulates mouse input. Unsigned binaries performing these actions often trigger heuristic warnings. You can audit the source code in this repo and add an exclusion to your antivirus.
 
-**My antivirus flags or deletes it.**
-The tool uses fullscreen capture, cross-monitor coordinate mapping, and global keyboard hooks — all of which trigger heuristic detections. It's also unsigned. The source code is fully available here; add it to your antivirus whitelist if you're comfortable.
-
-**The lines come out jagged or polygonal.**
-Your drawing speed is too high. Lower the speed slider (2-4 is a good range).
-
----
-
+**The lines are jagged or shifting.**
+Try lowering the Speed slider. If the drawing is offset, ensure your Windows "Scale and Layout" settings are consistent across monitors.
