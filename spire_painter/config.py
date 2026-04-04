@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, asdict
 
-from spire_painter.constants import DEFAULT_DETAIL, DEFAULT_SPEED, DEFAULT_FILL_GAP
+from spire_painter.constants import DEFAULT_DETAIL, DEFAULT_SPEED, DEFAULT_FILL_GAP, DEFAULT_BRUSH_WIDTH
 
 
 @dataclass
@@ -11,7 +11,10 @@ class AppConfig:
     speed: int = DEFAULT_SPEED
     fill_gap: int = DEFAULT_FILL_GAP
     thickness: int = 1
-    is_left_click: bool = False
+    brush_width: int = DEFAULT_BRUSH_WIDTH
+    draw_mode: str = "right"  # "right", "left", or "middle"
+    edge_close: int = 3
+    eraser_refine: bool = False
     is_first_run: bool = True
 
 
@@ -26,11 +29,17 @@ def load_config(path: str) -> AppConfig:
             config.speed = conf.get("speed", config.speed)
             config.fill_gap = conf.get("fill_gap", config.fill_gap)
             config.thickness = conf.get("thickness", config.thickness)
+            config.brush_width = conf.get("brush_width", config.brush_width)
+            config.edge_close = conf.get("edge_close", config.edge_close)
+            config.eraser_refine = conf.get("eraser_refine", config.eraser_refine)
             config.is_first_run = conf.get("is_first_run", config.is_first_run)
-            if "is_left_click" in conf:
-                config.is_left_click = conf["is_left_click"]
+            # draw_mode: new field, with migration from legacy is_left_click
+            if "draw_mode" in conf:
+                config.draw_mode = conf["draw_mode"]
+            elif "is_left_click" in conf:
+                config.draw_mode = "left" if conf["is_left_click"] else "right"
             elif "click_mode" in conf:
-                config.is_left_click = "Left" in conf["click_mode"] or "\u5de6\u952e" in conf["click_mode"]
+                config.draw_mode = "left" if ("Left" in conf["click_mode"] or "\u5de6\u952e" in conf["click_mode"]) else "right"
     except (json.JSONDecodeError, OSError, KeyError):
         pass
     return config
