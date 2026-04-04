@@ -1,6 +1,6 @@
-# Slay the Spire 2 - Digital Auto-Painter
+# Slay the Spire 2 - Map Auto-Painter
 
-An automation tool for the "Digital Amber" drawing mechanic in Slay the Spire 2. This tool translates images, text, and custom line art into in-game mouse strokes with high precision.
+An automation tool for the drawing mechanic in Slay the Spire 2. This tool translates images, text, and custom line art into in-game mouse strokes for drawing art.
 
 ---
 
