@@ -1,0 +1,64 @@
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.json
+
+# --- Byte-compiled / optimized / DLL files ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environments ---
+# It is best practice to keep these out of source control
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Distribution / Packaging ---
+# Files created when building or installing a package
+dist/
+build/
+*.egg-info/
+.eggs/
+nosetests.xml
+pip-wheel-metadata/
+
+# --- Unit test / Coverage reports ---
+htmlcov/
+.tox/
+.nosexml
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints
+
+# --- Environment variables / Local secrets ---
+# Never commit your .env files containing API keys or passwords
+.env
+.flaskenv
+
+# --- Operating System Files ---
+# macOS
+.DS_Store
+# Windows
+Thumbs.db
+desktop.ini
+
+# --- IDEs and Editors ---
+# PyCharm / IntelliJ
+.idea/
+# VS Code
+.vscode/
+# Vim
