@@ -34,13 +34,13 @@ class DrawingSettingsPanel:
         Tooltip(self.draw_mode_combo, "Right = draw in StS2, Left = draw in Paint.")
 
         # Sliders
-        self.speed_slider, self.lbl_speed_val = add_slider(
+        self.speed_slider, self.speed_entry, self.speed_var = add_slider(
             wrap, "Draw Speed:", 1, 20, config.speed, on_speed_change,
             tooltip="Contour points to skip. Lower = smoother but slower. 2-4 recommended.")
-        self.brush_slider, self.lbl_brush_val = add_slider(
+        self.brush_slider, self.brush_entry, self.brush_var = add_slider(
             wrap, "Brush Width:", 1, 15, config.brush_width, on_brush_change, suffix=" px",
-            tooltip="In-game pen thickness (pixels). Match to the actual pen width in StS2.")
-        self.edge_close_slider, self.lbl_edge_close_val = add_slider(
+            tooltip="In-game pen thickness (pixels). Affects preview accuracy.")
+        self.edge_close_slider, self.edge_close_entry, self.edge_close_var = add_slider(
             wrap, "Edge Close:", 1, 9, config.edge_close, on_edge_close_change,
             tooltip="Bridge gaps in edges. Higher = more connected lines. 1 = off.")
 

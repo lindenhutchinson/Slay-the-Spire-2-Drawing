@@ -281,9 +281,45 @@ def _order_and_merge_strokes(strokes, merge_threshold):
 # Stroke drawing
 # ---------------------------------------------------------
 
+def _split_at_sentinels(pts):
+    """Split a merged stroke list at None sentinels into sub-strokes."""
+    sub = []
+    current = []
+    for p in pts:
+        if p is None:
+            if current:
+                sub.append(current)
+                current = []
+        else:
+            current.append(p)
+    if current:
+        sub.append(current)
+    return sub
+
+
 def _draw_stroke(state, screen_pts, draw_mode):
     """Draw a single merged stroke with adaptive pen control.
+    Splits at None sentinels to ensure pen lifts between sub-strokes.
     Returns False if aborted."""
+    if not screen_pts:
+        return True
+
+    # Split at merge boundaries — each sub-stroke gets its own pen cycle
+    sub_strokes = _split_at_sentinels(screen_pts)
+
+    for sub in sub_strokes:
+        if state.abort:
+            return False
+        if not sub:
+            continue
+        if not _draw_sub_stroke(state, sub, draw_mode):
+            return False
+
+    return True
+
+
+def _draw_sub_stroke(state, screen_pts, draw_mode):
+    """Draw a single continuous sub-stroke. Returns False if aborted."""
     if not screen_pts:
         return True
 
@@ -304,26 +340,8 @@ def _draw_stroke(state, screen_pts, draw_mode):
         if state.abort:
             break
 
-        # None sentinel = merge boundary, lift pen and jump
-        if screen_pts[i] is None or screen_pts[i - 1] is None:
-            if screen_pts[i] is None:
-                # Current is sentinel, lift pen
-                if pen_is_down:
-                    _pen_up(draw_mode)
-                    pen_is_down = False
-                    precise_sleep(CONTOUR_PEN_DELAY)
-                prev_dx, prev_dy = 0.0, 0.0
-            continue
-
         px, py = screen_pts[i]
-        prev_idx = i - 1
-        while prev_idx >= 0 and screen_pts[prev_idx] is None:
-            prev_idx -= 1
-        if prev_idx < 0:
-            prev_px, prev_py = px, py
-        else:
-            prev_px, prev_py = screen_pts[prev_idx]
-
+        prev_px, prev_py = screen_pts[i - 1]
         dx = float(px - prev_px)
         dy = float(py - prev_py)
 

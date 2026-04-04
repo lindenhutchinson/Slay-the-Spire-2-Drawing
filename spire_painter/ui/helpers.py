@@ -11,33 +11,63 @@ def flat_button(parent, text, command, state=tk.NORMAL, bg="#FFFFFF", active_bg=
 
 
 def add_slider(parent, label, from_, to, init, command, suffix="", tooltip=None):
-    """Create a labeled slider row. Returns (slider, val_label)."""
+    """Create a labeled slider with an editable number entry.
+
+    The slider has a fixed range for quick adjustment. The entry accepts any
+    integer, allowing values beyond the slider's range. Editing the entry
+    updates the slider (clamped) and fires the command callback.
+
+    Returns (slider, entry, val_var) where val_var is a StringVar holding the
+    current display value.
+    """
     frame = tk.Frame(parent, bg=BG_COLOR)
     frame.pack(fill="x", pady=(2, 0))
+
     lbl = tk.Label(frame, text=label, bg=BG_COLOR, font=(DEFAULT_FONT, 9))
     lbl.pack(side="left")
+
     slider = ttk.Scale(frame, from_=from_, to=to, orient="horizontal",
                        style="Blue.Horizontal.TScale", command=command)
     slider.set(init)
     slider.pack(side="left", fill="x", expand=True, padx=5)
-    val_label = tk.Label(frame, text=f"{init}{suffix}", font=(DEFAULT_FONT, 10, "bold"),
-                         fg="#2196F3", bg=BG_COLOR)
-    val_label.pack(side="left")
+
+    # Editable entry for precise/out-of-range values
+    val_var = tk.StringVar(value=f"{init}{suffix}")
+    entry = tk.Entry(frame, textvariable=val_var, width=5, font=(DEFAULT_FONT, 9, "bold"),
+                     fg="#2196F3", bg="white", relief="solid", bd=1, justify="center")
+    entry.pack(side="left")
+
+    # When user edits the entry and presses Enter, update the slider
+    def _on_entry_commit(event=None):
+        text = val_var.get().strip().rstrip(suffix.strip()) if suffix else val_var.get().strip()
+        try:
+            v = int(text)
+        except ValueError:
+            return
+        # Clamp slider to its range, but let the command handle the actual value
+        slider.set(max(from_, min(to, v)))
+        # Fire the command with the typed value (may be outside slider range)
+        command(str(v))
+
+    entry.bind("<Return>", _on_entry_commit)
+    entry.bind("<FocusOut>", _on_entry_commit)
+
     if tooltip:
         from spire_painter.tooltip import Tooltip
         Tooltip(lbl, tooltip)
         Tooltip(slider, tooltip)
-    return slider, val_label
+        Tooltip(entry, tooltip)
+
+    return slider, entry, val_var
 
 
-def snap_slider(slider, val_label, val, suffix=""):
-    """Snap slider to integer and update label. Returns True if value changed."""
+def snap_slider(slider, entry, val_var, val, suffix=""):
+    """Snap slider to integer, update entry display. Returns True if value changed."""
     v = round(float(val))
     if abs(float(val) - v) > 0.001:
         slider.set(v)
-    current = val_label.cget("text")
     new_text = f"{v}{suffix}"
-    if current != new_text:
-        val_label.config(text=new_text)
+    if val_var.get() != new_text:
+        val_var.set(new_text)
         return True
     return False
