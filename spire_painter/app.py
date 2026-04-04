@@ -12,7 +12,7 @@ from spire_painter.constants import (
 )
 from spire_painter.drawing_state import state
 from spire_painter.config import load_config, save_config as save_config_file, AppConfig
-from spire_painter.image_processing import generate_lineart, simulate_drawing
+from spire_painter.image_processing import generate_lineart, simulate_drawing, optimize_settings
 from spire_painter.drawing_engine import draw_contours
 from spire_painter.widgets import DigitalAmberOverlay
 from spire_painter.preview_panel import PreviewPanel
@@ -132,12 +132,16 @@ class SpirePainterApp:
         self.top_bar = TopBar(left, self.topmost_var, self.save_config)
 
         self.image_source = ImageSourcePanel(
-            left, cfg.detail, cfg.thickness,
+            left, cfg,
             on_detail_change=self.on_detail_change,
             on_thickness_change=self.on_thickness_change,
+            on_blur_change=self.on_blur_change,
+            on_min_contour_change=self.on_min_contour_change,
             on_select_image=self.select_image,
             on_refresh=self.generate_image_lineart,
             on_load_existing=self.load_existing_lineart,
+            on_optimize=self.run_optimize,
+            on_bg_removal_toggle=self.on_bg_removal_toggle,
         )
 
         self.draw_settings = DrawingSettingsPanel(
@@ -162,28 +166,32 @@ class SpirePainterApp:
     def on_detail_change(self, val):
         if not hasattr(self, 'image_source'):
             return
-        if snap_slider(self.image_source.detail_slider, self.image_source.lbl_detail_val, val):
+        imgs = self.image_source
+        if snap_slider(imgs.detail_slider, imgs.detail_entry, imgs.detail_var, val):
             self.save_config()
             self._schedule_lineart_refresh()
 
     def on_thickness_change(self, val):
         if not hasattr(self, 'image_source'):
             return
-        if snap_slider(self.image_source.thickness_slider, self.image_source.lbl_thick_val, val):
+        imgs = self.image_source
+        if snap_slider(imgs.thickness_slider, imgs.thickness_entry, imgs.thickness_var, val):
             self.save_config()
             self._schedule_lineart_refresh()
 
     def on_speed_change(self, val):
         if not hasattr(self, 'draw_settings'):
             return
-        if snap_slider(self.draw_settings.speed_slider, self.draw_settings.lbl_speed_val, val):
+        ds = self.draw_settings
+        if snap_slider(ds.speed_slider, ds.speed_entry, ds.speed_var, val):
             self.save_config()
             self._schedule_preview_refresh()
 
     def on_brush_change(self, val):
         if not hasattr(self, 'draw_settings'):
             return
-        if snap_slider(self.draw_settings.brush_slider, self.draw_settings.lbl_brush_val, val, " px"):
+        ds = self.draw_settings
+        if snap_slider(ds.brush_slider, ds.brush_entry, ds.brush_var, val, " px"):
             self.save_config()
             self._schedule_preview_refresh()
 
@@ -193,9 +201,35 @@ class SpirePainterApp:
         v = round(float(val))
         if v > 1 and v % 2 == 0:
             v += 1
-        if snap_slider(self.draw_settings.edge_close_slider, self.draw_settings.lbl_edge_close_val, v):
+        ds = self.draw_settings
+        if snap_slider(ds.edge_close_slider, ds.edge_close_entry, ds.edge_close_var, v):
             self.save_config()
             self._schedule_preview_refresh()
+
+    def on_bg_removal_toggle(self):
+        if not hasattr(self, 'image_source'):
+            return
+        self.save_config()
+        self._schedule_lineart_refresh()
+
+    def on_blur_change(self, val):
+        if not hasattr(self, 'image_source'):
+            return
+        v = round(float(val))
+        if v > 1 and v % 2 == 0:
+            v += 1
+        imgs = self.image_source
+        if snap_slider(imgs.blur_slider, imgs.blur_entry, imgs.blur_var, v):
+            self.save_config()
+            self._schedule_lineart_refresh()
+
+    def on_min_contour_change(self, val):
+        if not hasattr(self, 'image_source'):
+            return
+        imgs = self.image_source
+        if snap_slider(imgs.min_contour_slider, imgs.min_contour_entry, imgs.min_contour_var, val):
+            self.save_config()
+            self._schedule_lineart_refresh()
 
     # ------------------------------------------------------------------
     # Debounced refresh
@@ -226,12 +260,14 @@ class SpirePainterApp:
         if not self.current_lineart_path or not os.path.exists(self.current_lineart_path):
             return
         ds = self.draw_settings
+        imgs = self.image_source
         sim_img = simulate_drawing(
             self.current_lineart_path,
             speed=int(round(float(ds.speed_slider.get()))),
             brush_width=int(round(float(ds.brush_slider.get()))),
             edge_close=int(round(float(ds.edge_close_slider.get()))),
             eraser_refine=self.eraser_refine_var.get(),
+            min_contour_len=int(round(float(imgs.min_contour_slider.get()))),
         )
         self.preview.update_from_image(sim_img)
 
@@ -252,6 +288,9 @@ class SpirePainterApp:
             speed=int(round(float(ds.speed_slider.get()))),
             thickness=int(round(float(imgs.thickness_slider.get()))),
             brush_width=int(round(float(ds.brush_slider.get()))),
+            blur=int(round(float(imgs.blur_slider.get()))),
+            min_contour_len=int(round(float(imgs.min_contour_slider.get()))),
+            bg_removal=imgs.bg_removal_var.get(),
             draw_mode=ds.draw_mode,
             edge_close=int(round(float(ds.edge_close_slider.get()))),
             eraser_refine=self.eraser_refine_var.get(),
@@ -303,19 +342,82 @@ class SpirePainterApp:
         if file_path:
             self.last_raw_image_path = file_path
             self.image_source.btn_reprocess.config(state=tk.NORMAL)
+            self.image_source.btn_optimize.config(state=tk.NORMAL)
             self.generate_image_lineart()
 
     def generate_image_lineart(self):
         state.trigger_abort()
         if not self.last_raw_image_path:
             return
-        detail = int(round(float(self.image_source.detail_slider.get())))
-        thickness = int(round(float(self.image_source.thickness_slider.get())))
-        save_path = generate_lineart(self.last_raw_image_path, detail, self.output_dir, thickness)
+        imgs = self.image_source
+        detail = int(round(float(imgs.detail_slider.get())))
+        thickness = int(round(float(imgs.thickness_slider.get())))
+        blur = int(round(float(imgs.blur_slider.get())))
+        min_len = int(round(float(imgs.min_contour_slider.get())))
+        bg_removal = imgs.bg_removal_var.get()
+        save_path = generate_lineart(self.last_raw_image_path, detail, self.output_dir,
+                                     thickness, blur, min_len, bg_removal)
         self.current_lineart_path = save_path
         self.top_bar.update_status(f"Line art generated (detail: {detail})")
         self.btn_start.config(state=tk.NORMAL)
         self._refresh_simulated_preview()
+
+    def run_optimize(self):
+        if not self.last_raw_image_path:
+            return
+
+        # Create progress bar popup
+        popup = tk.Toplevel(self.root)
+        popup.title("Optimizing")
+        popup.resizable(False, False)
+        popup.attributes('-topmost', True)
+        popup.grab_set()
+
+        pw, ph = 350, 80
+        x = self.root.winfo_x() + (self.root.winfo_width() - pw) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - ph) // 2
+        popup.geometry(f"{pw}x{ph}+{x}+{y}")
+
+        tk.Label(popup, text="Finding optimal settings...",
+                 font=(DEFAULT_FONT, 10)).pack(pady=(10, 5))
+        progress = ttk.Progressbar(popup, length=300, mode='determinate')
+        progress.pack(padx=25, pady=(0, 10))
+
+        def update_progress(frac):
+            progress['value'] = frac * 100
+            popup.update()
+
+        try:
+            params = optimize_settings(self.last_raw_image_path, self.output_dir,
+                                       on_progress=update_progress)
+        except Exception as e:
+            popup.destroy()
+            messagebox.showerror("Optimize Failed", str(e))
+            return
+
+        popup.destroy()
+
+        if not params:
+            self.top_bar.update_status("Optimization found no improvement.")
+            return
+
+        # Apply optimized values to sliders
+        imgs = self.image_source
+        imgs.detail_slider.set(params['detail'])
+        imgs.blur_slider.set(params['blur'])
+        imgs.min_contour_slider.set(params['min_contour_len'])
+        imgs.thickness_slider.set(params['thickness'])
+        imgs.bg_removal_var.set(params.get('bg_removal', False))
+        self.draw_settings.edge_close_slider.set(params['edge_close'])
+        self.draw_settings.speed_slider.set(params.get('speed', 2))
+
+        self.save_config()
+        self.generate_image_lineart()
+
+        bg_str = ", bg removed" if params.get('bg_removal') else ""
+        self.top_bar.update_status(
+            f"Optimized: detail={params['detail']}, blur={params['blur']}, "
+            f"speed={params.get('speed', 2)}, min_len={params['min_contour_len']}{bg_str}")
 
     def load_existing_lineart(self):
         state.trigger_abort()

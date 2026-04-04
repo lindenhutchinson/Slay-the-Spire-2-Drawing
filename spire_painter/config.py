@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, asdict
 
-from spire_painter.constants import DEFAULT_DETAIL, DEFAULT_SPEED, DEFAULT_FILL_GAP, DEFAULT_BRUSH_WIDTH
+from spire_painter.constants import DEFAULT_DETAIL, DEFAULT_SPEED, DEFAULT_FILL_GAP, DEFAULT_BRUSH_WIDTH, BLUR_KERNEL_BASE
 
 
 @dataclass
@@ -12,7 +12,10 @@ class AppConfig:
     fill_gap: int = DEFAULT_FILL_GAP
     thickness: int = 1
     brush_width: int = DEFAULT_BRUSH_WIDTH
-    draw_mode: str = "right"  # "right", "left", or "middle"
+    blur: int = BLUR_KERNEL_BASE
+    min_contour_len: int = 0
+    bg_removal: bool = False
+    draw_mode: str = "right"
     edge_close: int = 3
     eraser_refine: bool = False
     is_first_run: bool = True
@@ -30,6 +33,9 @@ def load_config(path: str) -> AppConfig:
             config.fill_gap = conf.get("fill_gap", config.fill_gap)
             config.thickness = conf.get("thickness", config.thickness)
             config.brush_width = conf.get("brush_width", config.brush_width)
+            config.blur = conf.get("blur", config.blur)
+            config.min_contour_len = conf.get("min_contour_len", config.min_contour_len)
+            config.bg_removal = conf.get("bg_removal", config.bg_removal)
             config.edge_close = conf.get("edge_close", config.edge_close)
             config.eraser_refine = conf.get("eraser_refine", config.eraser_refine)
             config.is_first_run = conf.get("is_first_run", config.is_first_run)
