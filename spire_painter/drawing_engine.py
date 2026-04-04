@@ -150,14 +150,8 @@ def _angle_between(dx1, dy1, dx2, dy2):
 def _to_screen(point, offset_x, offset_y, scale):
     return int(offset_x + point[0][0] * scale), int(offset_y + point[0][1] * scale)
 
-
 def draw_contours(state, rx, ry, rw, rh, img_path, step, is_left_click):
-    """Draw line art contours with adaptive pen control.
-
-    Straight segments keep the pen down and move fast.
-    Sharp turns lift the pen, reposition, then press again to avoid smudging.
-    Moderate turns slow down but keep the pen down.
-    """
+    """Draw line art contours with adaptive pen control."""
     state.drawing = True
     try:
         time.sleep(INITIAL_DRAW_DELAY)
@@ -186,13 +180,20 @@ def draw_contours(state, rx, ry, rw, rh, img_path, step, is_left_click):
             # Convert all points to screen coords upfront
             screen_pts = [_to_screen(p, offset_x, offset_y, scale) for p in points]
 
-            # Check pause/abort between contours (safe — pen is up)
-            if not _check_pause_state(state, screen_pts[0][0], screen_pts[0][1], is_left_click):
+            # 1. ENSURE PEN IS UP before jumping to a new contour
+            _pen_up(is_left_click) 
+            pen_is_down = False
+            
+            # 2. Extract first point coordinates correctly
+            print(screen_pts)
+            start_x, start_y = screen_pts[0]
+
+            # 3. Check pause/abort between contours using start coordinates
+            if not _check_pause_state(state, start_x, start_y, is_left_click):
                 break
 
-            # Start the first stroke
-            pen_is_down = False
-            move_mouse(screen_pts[0][0], screen_pts[0][1])
+            # 4. Move to start and press down
+            move_mouse(start_x, start_y)
             time.sleep(CONTOUR_PEN_DELAY)
             _pen_down(is_left_click)
             pen_is_down = True
@@ -209,17 +210,15 @@ def draw_contours(state, rx, ry, rw, rh, img_path, step, is_left_click):
                 dx = float(px - prev_px)
                 dy = float(py - prev_py)
 
-                # Skip zero-length moves
                 if dx == 0.0 and dy == 0.0:
                     continue
 
-                # Calculate turn angle from previous direction
                 angle = 0.0
                 if prev_dx != 0.0 or prev_dy != 0.0:
                     angle = _angle_between(prev_dx, prev_dy, dx, dy)
 
                 if angle > CONTOUR_SHARP_ANGLE:
-                    # Sharp turn: lift pen, move to new position, press again
+                    # Sharp turn: lift pen, move, press again
                     if pen_is_down:
                         _pen_up(is_left_click)
                         pen_is_down = False
@@ -233,7 +232,7 @@ def draw_contours(state, rx, ry, rw, rh, img_path, step, is_left_click):
                     time.sleep(CONTOUR_PEN_DELAY)
 
                 elif angle > CONTOUR_SHARP_ANGLE * 0.5:
-                    # Moderate turn: keep pen down, slow down
+                    # Moderate turn: slow down
                     if not pen_is_down:
                         _pen_down(is_left_click)
                         pen_is_down = True
@@ -245,7 +244,7 @@ def draw_contours(state, rx, ry, rw, rh, img_path, step, is_left_click):
                     time.sleep(delay)
 
                 else:
-                    # Straight: keep pen down, full speed
+                    # Straight move
                     if not pen_is_down:
                         _pen_down(is_left_click)
                         pen_is_down = True
@@ -256,17 +255,25 @@ def draw_contours(state, rx, ry, rw, rh, img_path, step, is_left_click):
 
                 prev_dx, prev_dy = dx, dy
 
-                # Lightweight abort check (no pen manipulation)
+                # Re-syncing pause state within the loop
                 if state.pause:
                     if pen_is_down:
                         _pen_up(is_left_click)
                         pen_is_down = False
+                    
                     while state.pause:
                         time.sleep(PAUSE_CHECK_INTERVAL)
                         if state.abort:
                             break
+                    
+                    if not state.abort:
+                        time.sleep(RESUME_BUFFER)
+                        move_mouse(px, py)
+                        _pen_down(is_left_click)
+                        pen_is_down = True
+                        time.sleep(CLICK_SETTLE_DELAY)
 
-            # End of contour — ensure pen is up
+            # End of contour loop
             if pen_is_down:
                 _pen_up(is_left_click)
                 pen_is_down = False
@@ -277,4 +284,6 @@ def draw_contours(state, rx, ry, rw, rh, img_path, step, is_left_click):
         else:
             print("Drawing completed successfully! Memory auto-freed.")
     finally:
+        # Final safety cleanup
+        _pen_up(is_left_click)
         state.drawing = False
