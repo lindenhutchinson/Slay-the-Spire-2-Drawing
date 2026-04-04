@@ -1,7 +1,7 @@
 import threading
 import keyboard
 
-from spire_painter.mouse import left_click_up, right_click_up
+from spire_painter.mouse import left_click_up, right_click_up, middle_click_up
 
 
 class DrawingState:
@@ -51,6 +51,7 @@ class DrawingState:
             if self._drawing:
                 left_click_up()
                 right_click_up()
+                middle_click_up()
         print("\n[Paused] Triggered! You can safely perform other operations.")
 
     def trigger_resume(self):
@@ -66,6 +67,7 @@ class DrawingState:
             if self._drawing:
                 left_click_up()
                 right_click_up()
+                middle_click_up()
         print("\n[Terminated] Task list destroyed, memory freed!")
 
     def reset(self):

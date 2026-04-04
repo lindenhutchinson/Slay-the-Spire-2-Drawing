@@ -13,9 +13,16 @@ spire_painter/
   config.py                # JSON config dataclass + load/save
   image_processing.py      # Canny edge detection, text-to-lineart
   drawing_engine.py        # contour tracing + fog fill loops
-  widgets.py               # ToggleSwitch, CropOverlay, DigitalAmberOverlay
-  preview_panel.py         # zoomable/draggable preview canvas
-  app.py                   # main UI layout + wiring
+  widgets.py               # DigitalAmberOverlay
+  preview_panel.py         # zoomable/draggable preview canvas + inline crop
+  ui/
+    helpers.py             # flat_button, add_slider, snap_slider
+    top_bar.py             # TopBar (status, hotkeys, always-on-top)
+    image_source_panel.py  # ImageSourcePanel (detail, thickness, load buttons)
+    drawing_settings_panel.py  # DrawingSettingsPanel (mode, speed, brush, edge close)
+    preview_actions.py     # PreviewActions (crop, save, open folder)
+    tutorial_popup.py      # show_tutorial()
+  app.py                   # wires UI panels together + app logic
 ```
 
 ## Commands
