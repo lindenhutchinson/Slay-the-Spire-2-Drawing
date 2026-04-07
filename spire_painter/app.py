@@ -592,7 +592,7 @@ class SpirePainterApp:
     def select_image(self):
         state.trigger_abort()
         file_path = filedialog.askopenfilename(title="Select Source Image",
-                                               filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
+                                               filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp")])
         if file_path:
             self.last_raw_image_path = file_path
             self.image_source.btn_reprocess.config(state=tk.NORMAL)
@@ -687,7 +687,7 @@ class SpirePainterApp:
         file_path = filedialog.askopenfilename(
             initialdir=os.path.abspath(self.output_dir),
             title="Select Saved Line Art",
-            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")]
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp")]
         )
         if file_path:
             self.current_lineart_path = file_path
