@@ -46,10 +46,9 @@ Here's what the app looks like and what it can produce:
 * **Optimize Button:** Auto-tunes settings for any image (see below).
 * **Preset Profiles:** Save and reload named parameter sets for different image types.
 * **Undo / Redo:** Ctrl+Z / Ctrl+Y rolls settings back through history.
-* **Progress + ETA:** Live percentage and time estimate during drawing.
 * **Smooth Stroke Engine:** Simulates natural mouse dragging — adaptive speed on curves, pen lifts on sharp turns.
 * **Multi-Monitor Support:** Correctly handles coordinate mapping across different screen resolutions and "Virtual Desktop" setups.
-* **Area Filling:** "Fog of War" mode fills a designated area with a configurable crosshatch pattern.
+
 
 ---
 
