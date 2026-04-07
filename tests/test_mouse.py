@@ -1,4 +1,4 @@
-from spire_painter.mouse import _v_left, _v_top, _v_width, _v_height, _refresh_metrics, precise_sleep
+from spire_painter.mouse import _v_left, _v_top, _v_width, _v_height, refresh_metrics, precise_sleep
 import time
 
 
@@ -9,7 +9,7 @@ class TestMouseMetrics:
         assert _v_height > 0
 
     def test_refresh_metrics_doesnt_crash(self):
-        _refresh_metrics()
+        refresh_metrics()
         from spire_painter.mouse import _v_width, _v_height
         assert _v_width > 0
         assert _v_height > 0

@@ -4,22 +4,62 @@ import ctypes
 import threading
 import shutil
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from dataclasses import asdict
+
+from PIL import Image
 
 from spire_painter.constants import (
     WINDOW_WIDTH, WINDOW_HEIGHT, APP_ID, BG_COLOR, ACCENT_BLUE,
     TEXT_COLOR, BORDER_COLOR, DEFAULT_FONT, OVERLAY_LAUNCH_DELAY, TUTORIAL_POPUP_DELAY,
+    MAX_UNDO_HISTORY,
 )
-from spire_painter.drawing_state import state
-from spire_painter.config import load_config, save_config as save_config_file, AppConfig
+from spire_painter.drawing_state import state, setup_hotkeys, cleanup_hotkeys
+from spire_painter.config import (
+    load_config, save_config as save_config_file, AppConfig,
+    list_presets, save_preset, load_preset, delete_preset,
+)
 from spire_painter.image_processing import generate_lineart, simulate_drawing, optimize_settings
 from spire_painter.drawing_engine import draw_contours
 from spire_painter.widgets import DigitalAmberOverlay
 from spire_painter.preview_panel import PreviewPanel
 from spire_painter.ui import (
     TopBar, ImageSourcePanel, DrawingSettingsPanel, PreviewActions,
-    show_tutorial, snap_slider,
+    show_tutorial, snap_slider, snap_float_slider,
 )
+
+
+# ---------------------------------------------------------
+# Settings undo/redo history
+# ---------------------------------------------------------
+
+class SettingsHistory:
+    """Stores snapshots of AppConfig for undo/redo."""
+
+    def __init__(self, max_size=MAX_UNDO_HISTORY):
+        self._history: list[dict] = []
+        self._index = -1
+        self._max_size = max_size
+
+    def push(self, config: AppConfig):
+        # Truncate any redo history
+        self._history = self._history[:self._index + 1]
+        self._history.append(asdict(config))
+        if len(self._history) > self._max_size:
+            self._history.pop(0)
+        self._index = len(self._history) - 1
+
+    def undo(self) -> dict | None:
+        if self._index > 0:
+            self._index -= 1
+            return self._history[self._index].copy()
+        return None
+
+    def redo(self) -> dict | None:
+        if self._index < len(self._history) - 1:
+            self._index += 1
+            return self._history[self._index].copy()
+        return None
 
 
 class SpirePainterApp:
@@ -39,10 +79,7 @@ class SpirePainterApp:
         self.last_raw_image_path = None
         self._lineart_refresh_id = None
         self._preview_refresh_id = None
-
-        # Eraser refinement disabled — StS2 eraser is much thicker than the
-        # pen and its width is unknown, so erasing reliably is not possible.
-        self.eraser_refine_var = tk.BooleanVar(value=False)
+        self._progress_poll_id = None
 
         self.config_path = os.path.join(self.output_dir, "config.json")
         self.app_config = load_config(self.config_path)
@@ -50,7 +87,19 @@ class SpirePainterApp:
         self.topmost_var = tk.BooleanVar(value=self.app_config.topmost)
         self.root.attributes('-topmost', self.topmost_var.get())
 
+        self._draw_thread = None
+        self._history = SettingsHistory()
+
         self._build_layout()
+
+        # Push initial config to history
+        self._history.push(self.app_config)
+
+        # Bind undo/redo
+        self.root.bind("<Control-z>", self._undo_settings)
+        self.root.bind("<Control-y>", self._redo_settings)
+
+        setup_hotkeys()
 
         self.root.deiconify()
         self.root.update()
@@ -128,6 +177,9 @@ class SpirePainterApp:
                                    activeforeground="white", cursor="hand2")
         self.btn_start.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
 
+        # Preset bar (above start button)
+        self._build_preset_bar(left)
+
         # Panels
         self.top_bar = TopBar(left, self.topmost_var, self.save_config)
 
@@ -137,6 +189,7 @@ class SpirePainterApp:
             on_thickness_change=self.on_thickness_change,
             on_blur_change=self.on_blur_change,
             on_min_contour_change=self.on_min_contour_change,
+            on_clahe_change=self.on_clahe_change,
             on_select_image=self.select_image,
             on_refresh=self.generate_image_lineart,
             on_load_existing=self.load_existing_lineart,
@@ -150,14 +203,39 @@ class SpirePainterApp:
             on_brush_change=self.on_brush_change,
             on_edge_close_change=self.on_edge_close_change,
             on_draw_mode_change=self.save_config,
+            on_bezier_toggle=self._on_checkbox_save,
+            on_hatching_toggle=self._on_checkbox_preview,
+            on_hatching_density_change=self._on_hatching_density_change,
+            on_multi_res_toggle=self._on_checkbox_save,
+            on_eraser_refine_toggle=self._on_checkbox_save,
+            on_eraser_width_change=self._on_eraser_width_change,
         )
 
         self.preview_actions = PreviewActions(
             right, on_crop=self.start_crop, on_save=self.save_current_lineart,
             on_open_folder=self.open_output_folder,
+            on_side_by_side=self._toggle_side_by_side,
         )
 
         self.preview = PreviewPanel(right, on_image_loaded=self.preview_actions.enable)
+
+    def _build_preset_bar(self, parent):
+        """Build the preset save/load/delete bar."""
+        frame = tk.Frame(parent, bg=BG_COLOR)
+        frame.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+
+        tk.Label(frame, text="Preset:", bg=BG_COLOR, font=(DEFAULT_FONT, 9)).pack(side="left")
+
+        self.preset_combo = ttk.Combobox(frame, state="readonly", width=14, font=(DEFAULT_FONT, 9))
+        self.preset_combo.pack(side="left", padx=(5, 3))
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        self._refresh_preset_list()
+
+        from spire_painter.ui.helpers import flat_button
+        flat_button(frame, "Save", self._save_preset,
+                    bg="#E8F5E9", active_bg="#C8E6C9", fg="#1B5E20").pack(side="left", padx=(0, 3))
+        flat_button(frame, "Delete", self._delete_preset,
+                    bg="#FFEBEE", active_bg="#FFCDD2", fg="#B71C1C").pack(side="left")
 
     # ------------------------------------------------------------------
     # Slider handlers
@@ -215,10 +293,8 @@ class SpirePainterApp:
     def on_blur_change(self, val):
         if not hasattr(self, 'image_source'):
             return
-        v = round(float(val))
-        if v > 1 and v % 2 == 0:
-            v += 1
         imgs = self.image_source
+        v = round(float(val))
         if snap_slider(imgs.blur_slider, imgs.blur_entry, imgs.blur_var, v):
             self.save_config()
             self._schedule_lineart_refresh()
@@ -230,6 +306,38 @@ class SpirePainterApp:
         if snap_slider(imgs.min_contour_slider, imgs.min_contour_entry, imgs.min_contour_var, val):
             self.save_config()
             self._schedule_lineart_refresh()
+
+    def on_clahe_change(self, val):
+        if not hasattr(self, 'image_source'):
+            return
+        imgs = self.image_source
+        if snap_float_slider(imgs.clahe_slider, imgs.clahe_entry, imgs.clahe_var, val, resolution=0.5):
+            self.save_config()
+            self._schedule_lineart_refresh()
+
+    def _on_checkbox_save(self):
+        """Generic handler for checkboxes that just save config."""
+        self.save_config()
+
+    def _on_checkbox_preview(self):
+        """Handler for checkboxes that affect the preview."""
+        self.save_config()
+        self._schedule_preview_refresh()
+
+    def _on_hatching_density_change(self, val):
+        if not hasattr(self, 'draw_settings'):
+            return
+        ds = self.draw_settings
+        if snap_slider(ds.hatching_density_slider, ds.hatching_density_entry, ds.hatching_density_var, val):
+            self.save_config()
+            self._schedule_preview_refresh()
+
+    def _on_eraser_width_change(self, val):
+        if not hasattr(self, 'draw_settings'):
+            return
+        ds = self.draw_settings
+        if snap_slider(ds.eraser_width_slider, ds.eraser_width_entry, ds.eraser_width_var, val, " px"):
+            self.save_config()
 
     # ------------------------------------------------------------------
     # Debounced refresh
@@ -261,13 +369,36 @@ class SpirePainterApp:
             return
         ds = self.draw_settings
         imgs = self.image_source
+
+        # Load source grayscale for hatching preview
+        import cv2
+        import numpy as np
+        source_gray = None
+        if ds.hatching_var.get() and self.last_raw_image_path:
+            try:
+                source_gray = cv2.imdecode(
+                    np.fromfile(self.last_raw_image_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE
+                )
+                # Resize to match lineart dimensions
+                lineart_img = cv2.imdecode(
+                    np.fromfile(self.current_lineart_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE
+                )
+                if source_gray is not None and lineart_img is not None:
+                    source_gray = cv2.resize(source_gray, (lineart_img.shape[1], lineart_img.shape[0]))
+            except Exception:
+                source_gray = None
+
         sim_img = simulate_drawing(
             self.current_lineart_path,
             speed=int(round(float(ds.speed_slider.get()))),
             brush_width=int(round(float(ds.brush_slider.get()))),
             edge_close=int(round(float(ds.edge_close_slider.get()))),
-            eraser_refine=self.eraser_refine_var.get(),
+            eraser_refine=ds.eraser_refine_var.get(),
             min_contour_len=int(round(float(imgs.min_contour_slider.get()))),
+            bezier_fitting=ds.bezier_var.get(),
+            hatching_enabled=ds.hatching_var.get(),
+            hatching_density=int(round(float(ds.hatching_density_slider.get()))),
+            source_gray=source_gray,
         )
         self.preview.update_from_image(sim_img)
 
@@ -293,10 +424,126 @@ class SpirePainterApp:
             bg_removal=imgs.bg_removal_var.get(),
             draw_mode=ds.draw_mode,
             edge_close=int(round(float(ds.edge_close_slider.get()))),
-            eraser_refine=self.eraser_refine_var.get(),
+            eraser_refine=ds.eraser_refine_var.get(),
+            eraser_width=int(round(float(ds.eraser_width_slider.get()))),
             is_first_run=getattr(self, 'is_first_run', False),
+            clahe_clip=round(float(imgs.clahe_slider.get()) * 2) / 2,  # snap to 0.5
+            bezier_fitting=ds.bezier_var.get(),
+            hatching_enabled=ds.hatching_var.get(),
+            hatching_density=int(round(float(ds.hatching_density_slider.get()))),
+            multi_resolution=ds.multi_res_var.get(),
         )
         save_config_file(self.config_path, self.app_config)
+        self._history.push(self.app_config)
+
+    # ------------------------------------------------------------------
+    # Undo / Redo
+    # ------------------------------------------------------------------
+
+    def _undo_settings(self, event=None):
+        state_dict = self._history.undo()
+        if state_dict:
+            self._apply_settings_dict(state_dict)
+            self.top_bar.update_status("Settings undone (Ctrl+Z)")
+
+    def _redo_settings(self, event=None):
+        state_dict = self._history.redo()
+        if state_dict:
+            self._apply_settings_dict(state_dict)
+            self.top_bar.update_status("Settings redone (Ctrl+Y)")
+
+    def _apply_settings_dict(self, d):
+        """Apply a settings dict to all sliders/checkboxes without triggering save_config."""
+        imgs = self.image_source
+        ds = self.draw_settings
+
+        imgs.detail_slider.set(d.get('detail', 5))
+        imgs.thickness_slider.set(d.get('thickness', 1))
+        imgs.blur_slider.set(d.get('blur', 11))
+        imgs.min_contour_slider.set(d.get('min_contour_len', 0))
+        imgs.clahe_slider.set(d.get('clahe_clip', 0.0))
+        imgs.bg_removal_var.set(d.get('bg_removal', False))
+
+        ds.speed_slider.set(d.get('speed', 3))
+        ds.brush_slider.set(d.get('brush_width', 3))
+        ds.edge_close_slider.set(d.get('edge_close', 3))
+        ds.bezier_var.set(d.get('bezier_fitting', False))
+        ds.hatching_var.set(d.get('hatching_enabled', False))
+        ds.hatching_density_slider.set(d.get('hatching_density', 4))
+        ds.multi_res_var.set(d.get('multi_resolution', False))
+        ds.eraser_refine_var.set(d.get('eraser_refine', False))
+        ds.eraser_width_slider.set(d.get('eraser_width', 10))
+
+        # Rebuild config from dict and save without pushing to history
+        self.app_config = AppConfig(**{k: d[k] for k in AppConfig.__dataclass_fields__ if k in d})
+        save_config_file(self.config_path, self.app_config)
+
+        # Refresh
+        if self.last_raw_image_path:
+            self._schedule_lineart_refresh()
+        elif self.current_lineart_path:
+            self._schedule_preview_refresh()
+
+    # ------------------------------------------------------------------
+    # Presets
+    # ------------------------------------------------------------------
+
+    def _refresh_preset_list(self):
+        names = list_presets(self.output_dir)
+        self.preset_combo['values'] = names
+        if names:
+            self.preset_combo.set(names[0])
+        else:
+            self.preset_combo.set("")
+
+    def _on_preset_selected(self, event=None):
+        name = self.preset_combo.get()
+        if not name:
+            return
+        try:
+            d = load_preset(self.output_dir, name)
+        except Exception as e:
+            messagebox.showerror("Load Failed", str(e))
+            return
+        self._apply_settings_dict(d)
+        self._history.push(self.app_config)
+        self.top_bar.update_status(f"Loaded preset: {name}")
+
+    def _save_preset(self):
+        name = simpledialog.askstring("Save Preset", "Preset name:",
+                                      parent=self.root)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        try:
+            save_preset(self.output_dir, name, self.app_config)
+        except Exception as e:
+            messagebox.showerror("Save Failed", str(e))
+            return
+        self._refresh_preset_list()
+        self.preset_combo.set(name)
+        self.top_bar.update_status(f"Saved preset: {name}")
+
+    def _delete_preset(self):
+        name = self.preset_combo.get()
+        if not name:
+            return
+        try:
+            delete_preset(self.output_dir, name)
+        except Exception as e:
+            messagebox.showerror("Delete Failed", str(e))
+            return
+        self._refresh_preset_list()
+        self.top_bar.update_status(f"Deleted preset: {name}")
+
+    # ------------------------------------------------------------------
+    # Side-by-side
+    # ------------------------------------------------------------------
+
+    def _toggle_side_by_side(self):
+        self.preview.toggle_side_by_side()
 
     # ------------------------------------------------------------------
     # File operations
@@ -314,16 +561,23 @@ class SpirePainterApp:
                 messagebox.showerror("Save Failed", f"Unable to save file: {e}")
 
     def start_crop(self):
-        if self.current_lineart_path:
-            self.preview.enter_crop_mode(self._finish_crop)
+        if not self.last_raw_image_path or not os.path.exists(self.last_raw_image_path):
+            return
+        source_img = Image.open(self.last_raw_image_path)
+        self.preview.enter_crop_mode(
+            self._finish_crop,
+            source_image=source_img,
+            on_enter=self.preview_actions.hide,
+            on_exit=self.preview_actions.show,
+        )
 
     def _finish_crop(self, cropped_pil_image):
         time_str = time.strftime("%Y%m%d_%H%M%S")
-        new_path = os.path.join(self.output_dir, f"cropped_{time_str}.png")
-        cropped_pil_image.save(new_path)
-        self.current_lineart_path = new_path
-        self.top_bar.update_status(f"Cropped: {os.path.basename(new_path)}")
-        self._refresh_simulated_preview()
+        cropped_src_path = os.path.join(self.output_dir, f"cropped_src_{time_str}.png")
+        cropped_pil_image.save(cropped_src_path)
+        self.last_raw_image_path = cropped_src_path
+        self.top_bar.update_status(f"Cropped source: {os.path.basename(cropped_src_path)}")
+        self.generate_image_lineart()
 
     def open_output_folder(self):
         try:
@@ -343,6 +597,13 @@ class SpirePainterApp:
             self.last_raw_image_path = file_path
             self.image_source.btn_reprocess.config(state=tk.NORMAL)
             self.image_source.btn_optimize.config(state=tk.NORMAL)
+
+            # Store original for side-by-side
+            try:
+                self.preview.set_original_image(Image.open(file_path))
+            except Exception:
+                pass
+
             self.generate_image_lineart()
 
     def generate_image_lineart(self):
@@ -355,8 +616,9 @@ class SpirePainterApp:
         blur = int(round(float(imgs.blur_slider.get())))
         min_len = int(round(float(imgs.min_contour_slider.get())))
         bg_removal = imgs.bg_removal_var.get()
+        clahe_clip = round(float(imgs.clahe_slider.get()) * 2) / 2
         save_path = generate_lineart(self.last_raw_image_path, detail, self.output_dir,
-                                     thickness, blur, min_len, bg_removal)
+                                     thickness, blur, min_len, bg_removal, clahe_clip)
         self.current_lineart_path = save_path
         self.top_bar.update_status(f"Line art generated (detail: {detail})")
         self.btn_start.config(state=tk.NORMAL)
@@ -366,7 +628,6 @@ class SpirePainterApp:
         if not self.last_raw_image_path:
             return
 
-        # Create progress bar popup
         popup = tk.Toplevel(self.root)
         popup.title("Optimizing")
         popup.resizable(False, False)
@@ -408,6 +669,7 @@ class SpirePainterApp:
         imgs.min_contour_slider.set(params['min_contour_len'])
         imgs.thickness_slider.set(params['thickness'])
         imgs.bg_removal_var.set(params.get('bg_removal', False))
+        imgs.clahe_slider.set(params.get('clahe_clip', 0.0))
         self.draw_settings.edge_close_slider.set(params['edge_close'])
         self.draw_settings.speed_slider.set(params.get('speed', 2))
 
@@ -415,9 +677,10 @@ class SpirePainterApp:
         self.generate_image_lineart()
 
         bg_str = ", bg removed" if params.get('bg_removal') else ""
+        clahe_str = f", clahe={params.get('clahe_clip', 0)}" if params.get('clahe_clip', 0) > 0 else ""
         self.top_bar.update_status(
             f"Optimized: detail={params['detail']}, blur={params['blur']}, "
-            f"speed={params.get('speed', 2)}, min_len={params['min_contour_len']}{bg_str}")
+            f"speed={params.get('speed', 2)}, min_len={params['min_contour_len']}{bg_str}{clahe_str}")
 
     def load_existing_lineart(self):
         state.trigger_abort()
@@ -447,22 +710,83 @@ class SpirePainterApp:
         step = int(round(float(ds.speed_slider.get())))
         draw_mode = ds.draw_mode
         edge_close = int(round(float(ds.edge_close_slider.get())))
-        eraser_refine = self.eraser_refine_var.get()
+        eraser_refine = ds.eraser_refine_var.get()
         brush_width = int(round(float(ds.brush_slider.get())))
+        eraser_width = int(round(float(ds.eraser_width_slider.get())))
+        bezier_fitting = ds.bezier_var.get()
+        hatching_enabled = ds.hatching_var.get()
+        hatching_density = int(round(float(ds.hatching_density_slider.get())))
+        multi_resolution = ds.multi_res_var.get()
 
         DigitalAmberOverlay(
             self.root, self.current_lineart_path,
             lambda rx, ry, rw, rh, img_path, _: self._run_draw(
-                rx, ry, rw, rh, img_path, step, draw_mode, edge_close, eraser_refine, brush_width),
+                rx, ry, rw, rh, img_path, step, draw_mode, edge_close,
+                eraser_refine, brush_width, eraser_width,
+                bezier_fitting, hatching_enabled, hatching_density, multi_resolution),
             mode="lineart"
         )
 
-    def _run_draw(self, rx, ry, rw, rh, img_path, step, draw_mode, edge_close, eraser_refine, brush_width):
-        threading.Thread(
+    def _run_draw(self, rx, ry, rw, rh, img_path, step, draw_mode, edge_close,
+                  eraser_refine, brush_width, eraser_width,
+                  bezier_fitting, hatching_enabled, hatching_density, multi_resolution):
+        self._draw_thread = threading.Thread(
             target=draw_contours,
-            args=(state, rx, ry, rw, rh, img_path, step, draw_mode, edge_close, eraser_refine, brush_width),
+            args=(state, rx, ry, rw, rh, img_path, step, draw_mode),
+            kwargs=dict(
+                edge_close=edge_close,
+                eraser_refine=eraser_refine,
+                brush_width=brush_width,
+                eraser_width=eraser_width,
+                bezier_fitting=bezier_fitting,
+                hatching_enabled=hatching_enabled,
+                hatching_density=hatching_density,
+                multi_resolution=multi_resolution,
+                source_gray_path=self.last_raw_image_path,
+            ),
             daemon=True
-        ).start()
+        )
+        self._draw_thread.start()
+        self._start_progress_polling()
+
+    # ------------------------------------------------------------------
+    # Drawing progress polling
+    # ------------------------------------------------------------------
+
+    def _start_progress_polling(self):
+        """Start polling drawing progress for ETA display."""
+        if self._progress_poll_id is not None:
+            self.root.after_cancel(self._progress_poll_id)
+        self._progress_poll_id = self.root.after(1000, self._poll_draw_progress)
+
+    def _poll_draw_progress(self):
+        """Poll drawing state and update status bar with ETA."""
+        self._progress_poll_id = None
+
+        if not state.drawing:
+            self.top_bar.update_status("Drawing complete!")
+            return
+
+        completed, total, start_time = state.get_progress()
+
+        if total > 0 and completed > 0:
+            pct = completed / total * 100
+            elapsed = time.time() - start_time
+            if elapsed > 0 and completed > total * 0.02:
+                eta_secs = elapsed * (total - completed) / completed
+                if eta_secs < 60:
+                    eta_str = f"{int(eta_secs)}s"
+                elif eta_secs < 3600:
+                    eta_str = f"{int(eta_secs // 60)}m {int(eta_secs % 60)}s"
+                else:
+                    eta_str = f"{int(eta_secs // 3600)}h {int((eta_secs % 3600) // 60)}m"
+                self.top_bar.update_status(f"Drawing... {pct:.0f}% (~{eta_str} remaining)")
+            else:
+                self.top_bar.update_status(f"Drawing... {pct:.0f}%")
+        else:
+            self.top_bar.update_status("Drawing... preparing strokes")
+
+        self._progress_poll_id = self.root.after(1000, self._poll_draw_progress)
 
     # ------------------------------------------------------------------
     # Misc
@@ -470,7 +794,11 @@ class SpirePainterApp:
 
     def on_closing(self):
         state.trigger_abort()
-        time.sleep(0.1)
+        if self._progress_poll_id is not None:
+            self.root.after_cancel(self._progress_poll_id)
+        if self._draw_thread is not None and self._draw_thread.is_alive():
+            self._draw_thread.join(timeout=2)
+        cleanup_hotkeys()
         self.root.destroy()
 
     def _on_first_run(self):

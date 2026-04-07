@@ -1,3 +1,4 @@
+import logging
 import math
 import time
 
@@ -5,7 +6,7 @@ import cv2
 import numpy as np
 
 from spire_painter.mouse import (
-    move_mouse, precise_sleep,
+    move_mouse, precise_sleep, refresh_metrics,
     left_click_down, left_click_up,
     right_click_down, right_click_up,
     middle_click_down, middle_click_up,
@@ -15,9 +16,14 @@ from spire_painter.constants import (
     SWEEP_PEN_DELAY, SWEEP_MOVE_DELAY, SWEEP_LINE_DELAY, SWEEP_PHASE_GAP,
     SWEEP_STEP_MULTIPLIER, CONTOUR_PEN_DELAY, CONTOUR_MOVE_DELAY,
     CONTOUR_MOVE_DELAY_SLOW, CONTOUR_SHARP_ANGLE, CONTOUR_MERGE_THRESHOLD,
-    EDGE_CLOSE_KERNEL, DEFAULT_BRUSH_WIDTH,
+    EDGE_CLOSE_KERNEL, DEFAULT_BRUSH_WIDTH, DEFAULT_ERASER_WIDTH,
+    TWO_OPT_MAX_ITERATIONS, TWO_OPT_MAX_STROKES, BEZIER_MAX_ERROR,
 )
-from spire_painter.image_processing import compute_eraser_edges
+from spire_painter.image_processing import (
+    compute_eraser_edges, fit_bezier_contour, generate_hatching,
+)
+
+logger = logging.getLogger(__name__)
 
 # Draw modes: "right" = draw (StS2), "left" = draw (Paint), "middle" = eraser
 DRAW_MODE_LEFT = "left"
@@ -145,14 +151,14 @@ def draw_fill(state, rx, ry, rw, rh, step, fill_gap, draw_mode):
         time.sleep(SWEEP_PHASE_GAP)
 
         if state.abort:
-            print("Fill was force-terminated!")
+            logger.info("Fill was force-terminated!")
             return
 
         _sweep_axis(state, ry, ry + rh, rx, rx + rw,
                     step, fill_gap, draw_mode, horizontal=False)
 
         if not state.abort:
-            print("Fog double-fill complete!")
+            logger.info("Fog double-fill complete!")
     finally:
         _pen_up_all()
         state.drawing = False
@@ -193,7 +199,76 @@ def _dist_sq(p1, p2):
     return (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2
 
 
-def _order_and_merge_strokes(strokes, merge_threshold):
+# ---------------------------------------------------------
+# 2-opt stroke ordering improvement
+# ---------------------------------------------------------
+
+def _two_opt_improve(ordered, strokes):
+    """Improve stroke ordering using 2-opt TSP heuristic.
+
+    ordered: list of (stroke_idx, reversed_flag)
+    strokes: original stroke point lists
+    Returns improved ordered list.
+    """
+    if len(ordered) < 4:
+        return ordered
+
+    def _endpoint(idx, rev):
+        pts = strokes[idx]
+        return pts[-1] if not rev else pts[0]
+
+    def _startpoint(idx, rev):
+        pts = strokes[idx]
+        return pts[0] if not rev else pts[-1]
+
+    def _segment_cost(i, j):
+        """Travel cost between end of ordered[i] and start of ordered[j]."""
+        ep = _endpoint(*ordered[i])
+        sp = _startpoint(*ordered[j])
+        return math.sqrt(_dist_sq(ep, sp))
+
+    n = len(ordered)
+    improved = True
+    iterations = 0
+
+    while improved and iterations < TWO_OPT_MAX_ITERATIONS:
+        improved = False
+        iterations += 1
+        for i in range(n - 2):
+            for j in range(i + 2, n):
+                if j == n - 1 and i == 0:
+                    continue  # skip full reversal
+
+                # Current cost: edge (i, i+1) + edge (j, j+1 if exists)
+                old_cost = _segment_cost(i, i + 1)
+                if j + 1 < n:
+                    old_cost += _segment_cost(j, j + 1)
+
+                # Reverse the segment [i+1..j]
+                # New edges: (i, j) + (i+1, j+1 if exists)
+                # After reversal, ordered[i+1] becomes ordered[j] (reversed)
+                # and ordered[j] becomes ordered[i+1] (reversed)
+                trial = ordered[:i + 1] + [(idx, not rev) for idx, rev in reversed(ordered[i + 1:j + 1])]
+                if j + 1 < n:
+                    trial += ordered[j + 1:]
+
+                new_cost = 0
+                ep_i = _endpoint(*trial[i])
+                sp_ip1 = _startpoint(*trial[i + 1])
+                new_cost += math.sqrt(_dist_sq(ep_i, sp_ip1))
+                if j + 1 < n:
+                    ep_j = _endpoint(*trial[j])
+                    sp_jp1 = _startpoint(*trial[j + 1])
+                    new_cost += math.sqrt(_dist_sq(ep_j, sp_jp1))
+
+                if new_cost < old_cost - 0.5:  # small threshold to avoid floating point churn
+                    ordered = trial
+                    improved = True
+
+    return ordered
+
+
+def _order_and_merge_strokes(strokes, merge_threshold, use_two_opt=True):
     """Reorder strokes by nearest-neighbor and merge close endpoints into
     continuous drawing sequences.
 
@@ -207,6 +282,11 @@ def _order_and_merge_strokes(strokes, merge_threshold):
     merge_sq = merge_threshold ** 2
     remaining = list(range(len(strokes)))
     ordered = []
+
+    # Filter out empty strokes
+    remaining = [i for i in remaining if len(strokes[i]) >= 2]
+    if not remaining:
+        return []
 
     # Start with the stroke closest to origin (top-left first)
     best_idx = 0
@@ -248,9 +328,11 @@ def _order_and_merge_strokes(strokes, merge_threshold):
         chosen = remaining.pop(best_i)
         ordered.append((chosen, best_reversed))
 
+    # 2-opt improvement (skip for very large stroke sets)
+    if use_two_opt and len(ordered) <= TWO_OPT_MAX_STROKES:
+        ordered = _two_opt_improve(ordered, strokes)
+
     # Build merged strokes — connect strokes that end close to the next start.
-    # Insert a None sentinel between merged sub-strokes so _draw_stroke knows
-    # to lift the pen, move, and put pen back down at the join point.
     merged = []
     current_merged = []
 
@@ -264,7 +346,6 @@ def _order_and_merge_strokes(strokes, merge_threshold):
         else:
             gap = _dist_sq(current_merged[-1], pts[0])
             if gap <= merge_sq:
-                # Mark the boundary so the pen lifts across the gap
                 current_merged.append(None)
                 current_merged.extend(pts)
             else:
@@ -304,7 +385,6 @@ def _draw_stroke(state, screen_pts, draw_mode):
     if not screen_pts:
         return True
 
-    # Split at merge boundaries — each sub-stroke gets its own pen cycle
     sub_strokes = _split_at_sentinels(screen_pts)
 
     for sub in sub_strokes:
@@ -353,7 +433,6 @@ def _draw_sub_stroke(state, screen_pts, draw_mode):
             cos_val = _cos_between(prev_dx, prev_dy, dx, dy)
 
         if cos_val < _COS_SHARP:
-            # Sharp turn: lift pen, move, press again
             if pen_is_down:
                 _pen_up(draw_mode)
                 pen_is_down = False
@@ -367,7 +446,6 @@ def _draw_sub_stroke(state, screen_pts, draw_mode):
             precise_sleep(CONTOUR_PEN_DELAY)
 
         elif cos_val < _COS_MODERATE:
-            # Moderate turn: slow down
             if not pen_is_down:
                 _pen_down(draw_mode)
                 pen_is_down = True
@@ -379,7 +457,6 @@ def _draw_sub_stroke(state, screen_pts, draw_mode):
             precise_sleep(delay)
 
         else:
-            # Straight move
             if not pen_is_down:
                 _pen_down(draw_mode)
                 pen_is_down = True
@@ -390,7 +467,6 @@ def _draw_sub_stroke(state, screen_pts, draw_mode):
 
         prev_dx, prev_dy = dx, dy
 
-        # Handle pause mid-stroke
         if state.pause:
             if pen_is_down:
                 _pen_up(draw_mode)
@@ -419,7 +495,8 @@ def _draw_sub_stroke(state, screen_pts, draw_mode):
 # Main contour drawing entry point
 # ---------------------------------------------------------
 
-def _contours_to_strokes(contours, step, offset_x, offset_y, scale, merge_threshold):
+def _contours_to_strokes(contours, step, offset_x, offset_y, scale, merge_threshold,
+                         bezier_fitting=False):
     """Convert OpenCV contours to ordered, merged screen-coordinate strokes."""
     strokes = []
     for contour in contours:
@@ -432,43 +509,101 @@ def _contours_to_strokes(contours, step, offset_x, offset_y, scale, merge_thresh
         screen_pts = _dedup_points(screen_pts)
         if len(screen_pts) < 2:
             continue
+
+        if bezier_fitting and len(screen_pts) >= 3:
+            screen_pts = fit_bezier_contour(screen_pts)
+            if len(screen_pts) < 2:
+                continue
+
         strokes.append(screen_pts)
 
     return _order_and_merge_strokes(strokes, merge_threshold)
 
 
-def _draw_strokes(state, strokes, draw_mode):
-    """Draw a list of merged strokes. Returns False if aborted."""
+def _draw_strokes(state, strokes, draw_mode, progress_offset=0):
+    """Draw a list of merged strokes. Returns False if aborted.
+
+    progress_offset: number of points already completed (for progress tracking).
+    """
+    accumulated = progress_offset
     for stroke in strokes:
         if state.abort:
             return False
         _pen_up(draw_mode)
         if not _draw_stroke(state, stroke, draw_mode):
             return False
+        # Count non-None points in this stroke
+        pts_in_stroke = sum(1 for p in stroke if p is not None)
+        accumulated += pts_in_stroke
+        state.set_progress(accumulated, state.get_progress()[1])
     return True
+
+
+def _has_fine_detail(contour, coarse_step):
+    """Check if a contour has significant detail that would be lost at coarse_step.
+
+    Returns True if the contour is short or has high curvature segments.
+    """
+    n = len(contour)
+    # Short contours are always "fine detail"
+    if n < coarse_step * 3:
+        return True
+
+    # Check curvature: sample at coarse_step and measure deviation
+    pts = contour[:, 0, :].astype(np.float32)
+    max_dev = 0.0
+
+    for i in range(0, n - coarse_step, coarse_step):
+        end = min(i + coarse_step, n - 1)
+        if end <= i + 1:
+            continue
+        p1 = pts[i]
+        p2 = pts[end]
+        d = p2 - p1
+        seg_len = np.sqrt(d[0]**2 + d[1]**2)
+        if seg_len < 0.5:
+            continue
+
+        intermediates = pts[i + 1:end] - p1
+        cross = np.abs(d[0] * intermediates[:, 1] - d[1] * intermediates[:, 0])
+        dev = cross.max() / seg_len
+        if dev > max_dev:
+            max_dev = dev
+
+    return max_dev > 3.0  # high curvature threshold
 
 
 def draw_contours(state, rx, ry, rw, rh, img_path, step, draw_mode,
                   edge_close=EDGE_CLOSE_KERNEL, eraser_refine=False,
-                  brush_width=DEFAULT_BRUSH_WIDTH):
-    """Draw line art contours. When eraser_refine is True, does a three-pass draw:
+                  brush_width=DEFAULT_BRUSH_WIDTH, eraser_width=DEFAULT_ERASER_WIDTH,
+                  bezier_fitting=False, hatching_enabled=False, hatching_density=4,
+                  multi_resolution=False, source_gray_path=None):
+    """Draw line art contours with all feature options.
+
+    When eraser_refine is True, does a three-pass draw:
     1. Draw all contours with pen (thick lines)
-    2. Erase the excess with middle click (eraser is wider than pen, so overshoots)
-    3. Redraw the original contours with pen to restore detail the eraser ate
+    2. Erase the excess with middle click
+    3. Redraw the original contours with pen to restore detail
+
+    When multi_resolution is True, does a two-pass draw:
+    1. Coarse pass at 2x speed for structure
+    2. Fine pass for high-curvature detail only
     """
     state.drawing = True
+    state.start_timing()
     try:
+        refresh_metrics()
         time.sleep(INITIAL_DRAW_DELAY)
 
         img = cv2.imdecode(np.fromfile(img_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            print(f"Failed to load image: {img_path}")
+        if img is None or img.size == 0:
+            logger.error("Failed to load image: %s", img_path)
             return
 
         edges = cv2.bitwise_not(img)
         img_h, img_w = edges.shape
         if img_w == 0 or img_h == 0:
-            print("Image has zero dimensions")
+            logger.error("Image has zero dimensions")
             return
 
         if edge_close > 1:
@@ -482,40 +617,116 @@ def draw_contours(state, rx, ry, rw, rh, img_path, step, draw_mode,
         offset_y = ry + (rh - img_h * scale) / 2
         merge_threshold = int(CONTOUR_MERGE_THRESHOLD * scale) if scale > 1 else CONTOUR_MERGE_THRESHOLD
 
-        # Build strokes from original edges
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        draw_strokes = _contours_to_strokes(contours, step, offset_x, offset_y, scale, merge_threshold)
 
-        # --- Pass 1: Draw with pen ---
-        print(f"Pass 1 (draw): {len(draw_strokes)} strokes")
-        if not _draw_strokes(state, draw_strokes, draw_mode):
-            print("Drawing task was force-terminated!")
-            return
+        # Load source grayscale for hatching if needed
+        hatch_strokes = []
+        if hatching_enabled and source_gray_path:
+            try:
+                source_gray = cv2.imdecode(
+                    np.fromfile(source_gray_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE
+                )
+                if source_gray is not None:
+                    # Resize source_gray to match lineart dimensions
+                    source_gray = cv2.resize(source_gray, (img_w, img_h))
+                    hatch_contours = generate_hatching(source_gray, levels=hatching_density)
+                    hatch_strokes = _contours_to_strokes(
+                        hatch_contours, max(1, step), offset_x, offset_y, scale, merge_threshold
+                    )
+            except Exception as e:
+                logger.warning("Hatching generation failed: %s", e)
 
-        # --- Pass 2 & 3: Eraser refinement ---
-        if eraser_refine and brush_width > 2 and not state.abort:
-            eraser_edges = compute_eraser_edges(edges, brush_width)
-            eraser_contours, _ = cv2.findContours(eraser_edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-            eraser_strokes = _contours_to_strokes(eraser_contours, step, offset_x, offset_y, scale, merge_threshold)
+        if multi_resolution:
+            # --- Multi-resolution: coarse then fine ---
+            coarse_step = step * 2
 
-            # Pass 2: Erase the excess
-            print(f"Pass 2 (erase): {len(eraser_strokes)} strokes")
-            time.sleep(0.2)
-            if not _draw_strokes(state, eraser_strokes, DRAW_MODE_MIDDLE):
-                print("Drawing task was force-terminated!")
+            # Coarse pass: all contours at double speed
+            coarse_strokes = _contours_to_strokes(
+                contours, coarse_step, offset_x, offset_y, scale, merge_threshold,
+                bezier_fitting=bezier_fitting,
+            )
+
+            # Fine pass: only contours with fine detail
+            fine_contours = [c for c in contours if _has_fine_detail(c, coarse_step)]
+            fine_strokes = _contours_to_strokes(
+                fine_contours, step, offset_x, offset_y, scale, merge_threshold,
+                bezier_fitting=bezier_fitting,
+            )
+
+            total_pts = (
+                sum(sum(1 for p in s if p is not None) for s in coarse_strokes) +
+                sum(sum(1 for p in s if p is not None) for s in fine_strokes) +
+                sum(sum(1 for p in s if p is not None) for s in hatch_strokes)
+            )
+            state.set_progress(0, total_pts)
+
+            logger.info("Multi-res pass 1 (coarse): %d strokes", len(coarse_strokes))
+            if not _draw_strokes(state, coarse_strokes, draw_mode, progress_offset=0):
+                logger.info("Drawing task was force-terminated!")
                 return
 
-            # Pass 3: Redraw original edges to restore detail eraser ate
-            print(f"Pass 3 (redraw): {len(draw_strokes)} strokes")
-            time.sleep(0.2)
-            if not _draw_strokes(state, draw_strokes, draw_mode):
-                print("Drawing task was force-terminated!")
+            coarse_pts = sum(sum(1 for p in s if p is not None) for s in coarse_strokes)
+
+            logger.info("Multi-res pass 2 (fine): %d strokes", len(fine_strokes))
+            if not _draw_strokes(state, fine_strokes, draw_mode, progress_offset=coarse_pts):
+                logger.info("Drawing task was force-terminated!")
+                return
+
+            offset_after_fine = coarse_pts + sum(sum(1 for p in s if p is not None) for s in fine_strokes)
+
+        else:
+            # --- Standard single-pass ---
+            draw_strokes = _contours_to_strokes(
+                contours, step, offset_x, offset_y, scale, merge_threshold,
+                bezier_fitting=bezier_fitting,
+            )
+
+            total_pts = (
+                sum(sum(1 for p in s if p is not None) for s in draw_strokes) +
+                sum(sum(1 for p in s if p is not None) for s in hatch_strokes)
+            )
+            state.set_progress(0, total_pts)
+
+            logger.info("Pass 1 (draw): %d strokes", len(draw_strokes))
+            if not _draw_strokes(state, draw_strokes, draw_mode, progress_offset=0):
+                logger.info("Drawing task was force-terminated!")
+                return
+
+            offset_after_fine = sum(sum(1 for p in s if p is not None) for s in draw_strokes)
+
+            # --- Eraser refinement ---
+            if eraser_refine and brush_width > 2 and not state.abort:
+                eraser_edges = compute_eraser_edges(edges, brush_width, eraser_width)
+                eraser_contours, _ = cv2.findContours(
+                    eraser_edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
+                )
+                eraser_strokes = _contours_to_strokes(
+                    eraser_contours, step, offset_x, offset_y, scale, merge_threshold
+                )
+
+                logger.info("Pass 2 (erase): %d strokes", len(eraser_strokes))
+                time.sleep(0.2)
+                if not _draw_strokes(state, eraser_strokes, DRAW_MODE_MIDDLE):
+                    logger.info("Drawing task was force-terminated!")
+                    return
+
+                logger.info("Pass 3 (redraw): %d strokes", len(draw_strokes))
+                time.sleep(0.2)
+                if not _draw_strokes(state, draw_strokes, draw_mode):
+                    logger.info("Drawing task was force-terminated!")
+                    return
+
+        # --- Hatching pass ---
+        if hatch_strokes and not state.abort:
+            logger.info("Hatching pass: %d strokes", len(hatch_strokes))
+            if not _draw_strokes(state, hatch_strokes, draw_mode, progress_offset=offset_after_fine):
+                logger.info("Drawing task was force-terminated!")
                 return
 
         if not state.abort:
-            print("Drawing completed successfully!")
+            logger.info("Drawing completed successfully!")
         else:
-            print("Drawing task was force-terminated!")
+            logger.info("Drawing task was force-terminated!")
     finally:
         _pen_up_all()
         state.drawing = False

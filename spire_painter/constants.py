@@ -61,6 +61,32 @@ IMAGE_CANNY_LOWER_BASE = 180
 IMAGE_CANNY_UPPER_BASE = 250
 IMAGE_CANNY_DETAIL_FACTOR = 15
 BLUR_KERNEL_BASE = 11
+BILATERAL_D = 9              # bilateral filter diameter
+BILATERAL_SIGMA_BASE = 10    # sigma multiplier for blur slider
+CANNY_SIGMA_BASE = 0.33      # adaptive Canny base sigma
+DEFAULT_CLAHE_CLIP = 2.0     # CLAHE clip limit default
+CLAHE_GRID_SIZE = 8          # CLAHE tile grid size
+
+# Hatching
+HATCHING_LEVELS = 4           # number of shade quantization levels
+HATCHING_MIN_GAP = 4          # pixels between hatching lines (darkest region)
+HATCHING_MAX_GAP = 20         # pixels between hatching lines (lightest region)
+
+# Bezier curve fitting
+BEZIER_MAX_ERROR = 2.0        # max fitting error in pixels
+
+# Stroke ordering
+TWO_OPT_MAX_ITERATIONS = 50   # 2-opt improvement passes
+TWO_OPT_MAX_STROKES = 500     # skip 2-opt for very large stroke sets
+
+# Settings history
+MAX_UNDO_HISTORY = 30
+
+# Preset profiles
+PRESET_DIR_NAME = "presets"
+
+# Eraser
+DEFAULT_ERASER_WIDTH = 10
 
 # Drawing engine timing (seconds)
 INITIAL_DRAW_DELAY = 1.0

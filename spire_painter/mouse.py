@@ -1,7 +1,11 @@
+import atexit
 import ctypes
+import logging
 import time
 
 from spire_painter.constants import MOUSE_ABSOLUTE_MAX
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------
 # DPI Awareness
@@ -9,15 +13,27 @@ from spire_painter.constants import MOUSE_ABSOLUTE_MAX
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except OSError:
-    pass
+    logger.warning("DPI awareness not available on this system")
 
 # ---------------------------------------------------------
 # High-resolution timer (1ms instead of default ~15ms)
 # ---------------------------------------------------------
+_timer_period_set = False
 try:
     ctypes.windll.winmm.timeBeginPeriod(1)
+    _timer_period_set = True
 except Exception:
-    pass
+    logger.warning("Failed to set high-resolution timer period")
+
+
+def _cleanup_timer():
+    if _timer_period_set:
+        try:
+            ctypes.windll.winmm.timeEndPeriod(1)
+        except Exception:
+            pass
+
+atexit.register(_cleanup_timer)
 
 # ---------------------------------------------------------
 # Windows Mouse Event Constants
@@ -38,14 +54,16 @@ SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 
 # ---------------------------------------------------------
-# Cached virtual-screen metrics (queried once, not per move)
+# Virtual-screen metrics — refreshed before each drawing session
 # ---------------------------------------------------------
 _v_left = 0
 _v_top = 0
 _v_width = 0
 _v_height = 0
 
-def _refresh_metrics():
+def refresh_metrics():
+    """Re-query virtual screen metrics. Call before each drawing session
+    so that resolution changes or monitor (dis)connects are picked up."""
     global _v_left, _v_top, _v_width, _v_height
     _v_left = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
     _v_top = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
@@ -57,7 +75,7 @@ def _refresh_metrics():
         _v_left = 0
         _v_top = 0
 
-_refresh_metrics()
+refresh_metrics()
 
 # ---------------------------------------------------------
 # Mouse Control Functions
@@ -71,17 +89,17 @@ def move_mouse(x, y):
 
 def precise_sleep(seconds):
     """Sleep with ~1ms precision instead of the default ~15ms.
-    Uses spin-wait for sub-2ms durations where time.sleep is unreliable."""
+    Uses yielding spin-wait for sub-2ms durations where time.sleep is unreliable."""
     if seconds <= 0:
         return
     if seconds >= 0.002:
         # For longer sleeps, use kernel sleep (now 1ms resolution via timeBeginPeriod)
         time.sleep(seconds)
     else:
-        # Spin-wait for very short durations
+        # Yielding spin-wait for very short durations
         target = time.perf_counter() + seconds
         while time.perf_counter() < target:
-            pass
+            time.sleep(0.00001)  # 10µs yield to reduce CPU burn
 
 def right_click_down():
     ctypes.windll.user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)

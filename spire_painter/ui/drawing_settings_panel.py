@@ -3,7 +3,7 @@ from tkinter import ttk
 
 from spire_painter.constants import DEFAULT_FONT, BG_COLOR
 from spire_painter.tooltip import Tooltip
-from spire_painter.ui.helpers import add_slider
+from spire_painter.ui.helpers import add_slider, add_checkbox
 
 
 DRAW_MODE_MAP = {"Right Click (StS2)": "right", "Left Click (Paint)": "left"}
@@ -11,10 +11,13 @@ DRAW_MODE_REVERSE = {v: k for k, v in DRAW_MODE_MAP.items()}
 
 
 class DrawingSettingsPanel:
-    """Draw mode, speed, brush width, and edge close controls."""
+    """Draw mode, speed, brush width, edge close, and advanced drawing options."""
 
     def __init__(self, parent, config, on_speed_change, on_brush_change,
-                 on_edge_close_change, on_draw_mode_change):
+                 on_edge_close_change, on_draw_mode_change,
+                 on_bezier_toggle=None, on_hatching_toggle=None,
+                 on_hatching_density_change=None, on_multi_res_toggle=None,
+                 on_eraser_refine_toggle=None, on_eraser_width_change=None):
         frame = ttk.LabelFrame(parent, text=" Drawing Settings ", padding=(10, 5))
         frame.pack(side="top", fill="both", expand=True, padx=10, pady=(0, 5))
         wrap = tk.Frame(frame, bg=BG_COLOR)
@@ -43,6 +46,39 @@ class DrawingSettingsPanel:
         self.edge_close_slider, self.edge_close_entry, self.edge_close_var = add_slider(
             wrap, "Edge Close:", 1, 9, config.edge_close, on_edge_close_change,
             tooltip="Bridge gaps in edges. Higher = more connected lines. 1 = off.")
+
+        # Checkboxes for new features
+        self.bezier_var = tk.BooleanVar(value=config.bezier_fitting)
+        add_checkbox(wrap, "Smooth Curves (Bezier)", self.bezier_var,
+                     on_bezier_toggle or (lambda: None),
+                     tooltip="Fit smooth bezier curves to contours. Produces smoother output with fewer points.")
+
+        self.multi_res_var = tk.BooleanVar(value=config.multi_resolution)
+        add_checkbox(wrap, "Multi-Resolution Drawing", self.multi_res_var,
+                     on_multi_res_toggle or (lambda: None),
+                     tooltip="Draw coarse structure first, then fine detail. Gives usable results faster if aborted early.")
+
+        # Hatching
+        self.hatching_var = tk.BooleanVar(value=config.hatching_enabled)
+        add_checkbox(wrap, "Hatching / Shading", self.hatching_var,
+                     on_hatching_toggle or (lambda: None),
+                     tooltip="Add crosshatch shading based on image brightness. Darker regions get denser lines.")
+
+        self.hatching_density_slider, self.hatching_density_entry, self.hatching_density_var = add_slider(
+            wrap, "Shade Levels:", 2, 8, config.hatching_density,
+            on_hatching_density_change or (lambda v: None),
+            tooltip="Number of brightness levels for hatching. Higher = more gradations.")
+
+        # Eraser refinement
+        self.eraser_refine_var = tk.BooleanVar(value=config.eraser_refine)
+        add_checkbox(wrap, "Eraser Refinement", self.eraser_refine_var,
+                     on_eraser_refine_toggle or (lambda: None),
+                     tooltip="Three-pass drawing: draw thick, erase excess, redraw detail. Requires calibrated eraser width.")
+
+        self.eraser_width_slider, self.eraser_width_entry, self.eraser_width_var = add_slider(
+            wrap, "Eraser Width:", 3, 30, config.eraser_width,
+            on_eraser_width_change or (lambda v: None), suffix=" px",
+            tooltip="In-game eraser width in pixels. Calibrate by testing in the game.")
 
     @property
     def draw_mode(self):

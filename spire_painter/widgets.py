@@ -163,7 +163,7 @@ class DigitalAmberOverlay:
 
         try:
             screen_img = ImageGrab.grab(all_screens=True)
-        except Exception:
+        except (OSError, ValueError):
             screen_img = ImageGrab.grab()
 
         enhancer = ImageEnhance.Brightness(screen_img)

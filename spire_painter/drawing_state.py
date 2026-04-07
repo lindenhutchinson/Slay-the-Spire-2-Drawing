@@ -1,17 +1,26 @@
+import logging
 import threading
+import time
+
 import keyboard
 
 from spire_painter.mouse import left_click_up, right_click_up, middle_click_up
 
+logger = logging.getLogger(__name__)
+
 
 class DrawingState:
-    """Thread-safe state machine for drawing pause/resume/abort."""
+    """Thread-safe state machine for drawing pause/resume/abort with progress tracking."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._abort = False
         self._pause = False
         self._drawing = False
+        # Progress tracking
+        self._total_points = 0
+        self._completed_points = 0
+        self._draw_start_time = 0.0
 
     @property
     def abort(self):
@@ -43,6 +52,22 @@ class DrawingState:
         with self._lock:
             self._drawing = val
 
+    def start_timing(self):
+        with self._lock:
+            self._draw_start_time = time.time()
+            self._completed_points = 0
+            self._total_points = 0
+
+    def set_progress(self, completed, total):
+        with self._lock:
+            self._completed_points = completed
+            self._total_points = total
+
+    def get_progress(self):
+        """Returns (completed, total, start_time)."""
+        with self._lock:
+            return self._completed_points, self._total_points, self._draw_start_time
+
     def trigger_pause(self):
         with self._lock:
             if self._abort or self._pause:
@@ -52,13 +77,13 @@ class DrawingState:
                 left_click_up()
                 right_click_up()
                 middle_click_up()
-        print("\n[Paused] Triggered! You can safely perform other operations.")
+        logger.info("[Paused] Triggered! You can safely perform other operations.")
 
     def trigger_resume(self):
         with self._lock:
             if self._pause:
                 self._pause = False
-        print("\n[Resumed] Triggered! Drawing resumed.")
+        logger.info("[Resumed] Triggered! Drawing resumed.")
 
     def trigger_abort(self):
         with self._lock:
@@ -68,20 +93,32 @@ class DrawingState:
                 left_click_up()
                 right_click_up()
                 middle_click_up()
-        print("\n[Terminated] Task list destroyed, memory freed!")
+        logger.info("[Terminated] Task list destroyed, memory freed!")
 
     def reset(self):
         with self._lock:
             self._abort = False
             self._pause = False
+            self._total_points = 0
+            self._completed_points = 0
+            self._draw_start_time = 0.0
 
 
 # Module-level singleton
 state = DrawingState()
 
+_hotkeys_registered = False
+
 
 def setup_hotkeys():
-    """Register global keyboard hotkeys for pause/resume/abort."""
+    """Register global keyboard hotkeys for pause/resume/abort.
+
+    Safe to call multiple times — only registers once.
+    """
+    global _hotkeys_registered
+    if _hotkeys_registered:
+        return
+    _hotkeys_registered = True
 
     def handle_p_key(e):
         if keyboard.is_pressed('ctrl') or keyboard.is_pressed('alt'):
@@ -94,5 +131,13 @@ def setup_hotkeys():
     keyboard.on_press_key('[', lambda _: state.trigger_abort())
 
 
-# Register hotkeys on import
-setup_hotkeys()
+def cleanup_hotkeys():
+    """Unregister all keyboard hooks."""
+    global _hotkeys_registered
+    if not _hotkeys_registered:
+        return
+    try:
+        keyboard.unhook_all()
+    except Exception:
+        pass
+    _hotkeys_registered = False

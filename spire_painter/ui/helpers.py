@@ -61,12 +61,79 @@ def add_slider(parent, label, from_, to, init, command, suffix="", tooltip=None)
     return slider, entry, val_var
 
 
+def add_checkbox(parent, text, variable, command, tooltip=None):
+    """Create a styled checkbox. Returns the Checkbutton widget."""
+    chk = tk.Checkbutton(parent, text=text, font=(DEFAULT_FONT, 9),
+                         variable=variable, bg=BG_COLOR, command=command)
+    chk.pack(fill="x", pady=(2, 0))
+    if tooltip:
+        from spire_painter.tooltip import Tooltip
+        Tooltip(chk, tooltip)
+    return chk
+
+
+def add_float_slider(parent, label, from_, to, init, command, resolution=0.5, suffix="", tooltip=None):
+    """Create a labeled slider for float values with an editable entry.
+
+    Returns (slider, entry, val_var).
+    """
+    from tkinter import ttk
+
+    frame = tk.Frame(parent, bg=BG_COLOR)
+    frame.pack(fill="x", pady=(2, 0))
+
+    lbl = tk.Label(frame, text=label, bg=BG_COLOR, font=(DEFAULT_FONT, 9))
+    lbl.pack(side="left")
+
+    slider = ttk.Scale(frame, from_=from_, to=to, orient="horizontal",
+                       style="Blue.Horizontal.TScale", command=command)
+    slider.set(init)
+    slider.pack(side="left", fill="x", expand=True, padx=5)
+
+    val_var = tk.StringVar(value=f"{init}{suffix}")
+    entry = tk.Entry(frame, textvariable=val_var, width=5, font=(DEFAULT_FONT, 9, "bold"),
+                     fg="#2196F3", bg="white", relief="solid", bd=1, justify="center")
+    entry.pack(side="left")
+
+    def _on_entry_commit(event=None):
+        text = val_var.get().strip().rstrip(suffix.strip()) if suffix else val_var.get().strip()
+        try:
+            v = float(text)
+        except ValueError:
+            return
+        slider.set(max(from_, min(to, v)))
+        command(str(v))
+
+    entry.bind("<Return>", _on_entry_commit)
+    entry.bind("<FocusOut>", _on_entry_commit)
+
+    if tooltip:
+        from spire_painter.tooltip import Tooltip
+        Tooltip(lbl, tooltip)
+        Tooltip(slider, tooltip)
+        Tooltip(entry, tooltip)
+
+    return slider, entry, val_var
+
+
 def snap_slider(slider, entry, val_var, val, suffix=""):
     """Snap slider to integer, update entry display. Returns True if value changed."""
     v = round(float(val))
     if abs(float(val) - v) > 0.001:
         slider.set(v)
     new_text = f"{v}{suffix}"
+    if val_var.get() != new_text:
+        val_var.set(new_text)
+        return True
+    return False
+
+
+def snap_float_slider(slider, entry, val_var, val, resolution=0.5, suffix=""):
+    """Snap slider to resolution step, update entry display. Returns True if value changed."""
+    v = round(float(val) / resolution) * resolution
+    if abs(float(val) - v) > 0.001:
+        slider.set(v)
+    new_text = f"{v:.1f}{suffix}"
     if val_var.get() != new_text:
         val_var.set(new_text)
         return True
