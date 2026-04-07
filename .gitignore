@@ -4,6 +4,9 @@
 *.webp
 *.json
 *.spec
+!examples/*.png
+!examples/*.jpg
+!examples/*.jpeg
 # --- Byte-compiled / optimized / DLL files ---
 __pycache__/
 *.py[cod]
